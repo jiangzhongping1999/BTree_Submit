@@ -4,1148 +4,1148 @@
 #include "exception.hpp"
 #include <cstdio>
 namespace sjtu {
-    //B+树索引存储地址
-    constexpr char b+t_ad[128] = "mybptree.sjtu";
-    template <class K, class Val, class Cmp = std::less<K> >
-    class BTree {
-    private:
-        // Your private members go here
-        //块头
-        class BL_Head {
-        public:
-            //存储类型(0普通 1叶子)
-            bool BL_type = false;
-            off_t size = 0;
-            off_t pos = 0;
-            off_t parent = 0;
-            off_t last = 0;
-            off_t next = 0;
-        };
+	//B+树索引存储地址
+	constexpr char BPTREE_ADDRESS[128] = "mybptree.sjtu";
+	template <class Key, class Value, class Compare = std::less<Key> >
+	class BTree {
+	private:
+		// Your private members go here
+		//块头
+		class Block_Head {
+		public:
+			//存储类型(0普通 1叶子)
+			bool block_type = false;
+			off_t size = 0;
+			off_t pos = 0;
+			off_t parent = 0;
+			off_t last = 0;
+			off_t next = 0;
+		};
+		
+		//索引数据
+		struct Normal_Data_Node {
+			off_t child = 0;
+			Key key;
+		};
 
-        //索引数据
-        struct Normal_Dt_Node {
-            off_t son = 0;
-            K k;
-        };
+		//B+树大数据块大小
+		constexpr static off_t BLOCK_SIZE = 4096;
+		//大数据块预留数据块大小
+		constexpr static off_t INIT_SIZE = sizeof(Block_Head);
+		//Key类型的大小
+		constexpr static off_t KEY_SIZE = sizeof(Key);
+		//Value类型的大小
+		constexpr static off_t VALUE_SIZE = sizeof(Value);
+		//大数据块能够存储孩子的个数(M)
+		constexpr static off_t BLOCK_KEY_NUM = (BLOCK_SIZE - INIT_SIZE) / sizeof(Normal_Data_Node) - 1;
+		//小数据块能够存放的记录的个数(L)
+		constexpr static off_t BLOCK_PAIR_NUM = (BLOCK_SIZE - INIT_SIZE) / (KEY_SIZE + VALUE_SIZE) - 1;
 
-        //B+树大数据块大小
-        constexpr static off_t BL_SZ = 4096;
-        //大数据块预留数据块大小
-        constexpr static off_t IN_SZ = sizeof(BL_Head);
-        //Key类型的大小
-        constexpr static off_t K_SZ = sizeof(K);
-        //Val类型的大小
-        constexpr static off_t VAL_SZ = sizeof(Val);
-        //大数据块能够存储孩子的个数(M)
-        constexpr static off_t BL_K_N = (BL_SZ - IN_SZ) / sizeof(Normal_Dt_Node) - 1;
-        //小数据块能够存放的记录的个数(L)
-        constexpr static off_t BL_P_N = (BL_SZ - IN_SZ) / (K_SZ + VAL_SZ) - 1;
+		//私有类
+		//B+树文件头
+		class File_Head {
+		public:
+			//存储BLOCK占用的空间
+			off_t block_cnt = 1;
+			//存储根节点的位置
+			off_t root_pos = 0;
+			//存储数据块头
+			off_t data_block_head = 0;
+			//存储数据块尾
+			off_t data_block_rear = 0;
+			//存储大小
+			off_t size = 0;
+		};
 
-        //私有类
-        //B+树文件头
-        class  FL_Head {
-        public:
-            //存储BLOCK占用的空间
-            off_t bl_cnt = 1;
-            //存储根节点的位置
-            off_t rt_p = 0;
-            //存储数据块头
-            off_t dt_bl_hd = 0;
-            //存储数据块尾
-            off_t dt_bl_rr = 0;
-            //存储大小
-            off_t sz = 0;
-        };
+		class Normal_Data {
+		public:
+			Normal_Data_Node val[BLOCK_KEY_NUM];
+		};
 
-        class Normal_Dt {
-        public:
-            Normal_Dt_Node val[BL_K_N];
-        };
+		//叶子数据
+		class Leaf_Data {
+		public:
+			pair<Key, Value> val[BLOCK_PAIR_NUM];
+		};
 
-        //叶子数据
-        class Lf_Dt {
-        public:
-            pair<K, Val> val[BL_PAIR_N];
-        };
+		//私有变量
+		//文件头
+		File_Head tree_data;
 
-        //私有变量
-        //文件头
-        FL_Head tr_dt;
+		//文件指针
+		static FILE* fp;
 
-        //文件指针
-        static FILE* fp;
+		//私有函数
+		//块内存读取
+		template <class MEM_TYPE>
+		static void mem_read(MEM_TYPE buff, off_t buff_size, off_t pos) {
+			fseek(fp, long(buff_size * pos), SEEK_SET);
+			fread(buff, buff_size, 1, fp);
+		}
 
-        //私有函数
-        //块内存读取
-        template <class M_TP>
-        static void m_rd(M_TP bf, off_t bf_sz, off_t pos) {
-            fseek(fp, long(bf_sz * pos), SEEK_SET);
-            fread(bf, bf_sz, 1, fp);
-        }
+		//块内存写入
+		template <class MEM_TYPE>
+		static void mem_write(MEM_TYPE buff, off_t buff_size, off_t pos) {
+			fseek(fp, long(buff_size * pos), SEEK_SET);
+			fwrite(buff, buff_size, 1, fp);
+			fflush(fp);
+		}
 
-        //块内存写入
-        template <class M_TP>
-        static void m_wr(M_TP bf, off_t bf_sz, off_t pos) {
-            fseek(fp, long(bf_sz * pos), SEEK_SET);
-            fwrite(bf, bf_sz, 1, fp);
-            fflush(fp);
-        }
+		//写入B+树基本数据
+		void write_tree_data() {
+			fseek(fp, 0, SEEK_SET);
+			char buff[BLOCK_SIZE] = { 0 };
+			memcpy(buff, &tree_data, sizeof(tree_data));
+			mem_write(buff, BLOCK_SIZE, 0);
+		}
 
-        //写入B+树基本数据
-        void wr_tr_dt() {
-            fseek(fp, 0, SEEK_SET);
-            char bf[BL_SZ] = { 0 };
-            memcpy(bf, &tr_dt, sizeof(tr_dt));
-            m_wr(bf, BL_SZ, 0);
-        }
+		//获取新内存
+		off_t memory_allocation() {
+			++tree_data.block_cnt;
+			write_tree_data();
+			char buff[BLOCK_SIZE] = { 0 };
+			mem_write(buff, BLOCK_SIZE, tree_data.block_cnt - 1);
+			return tree_data.block_cnt - 1;
+		}
 
-        //获取新内存
-        off_t memory_allocation() {
-            ++tr_dt.bl_cnt;
-            wr_tr_dt();
-            char bf[BL_SZ] = { 0 };
-            m_wr(bf, BL_SZ, tr_dt.bl_cnt - 1);
-            return tr_dt.bl_cnt - 1;
-        }
+		//创建新的索引结点
+		off_t create_normal_node(off_t parent) {
+			auto node_pos = memory_allocation();
+			Block_Head temp;
+			Normal_Data normal_data;
+			temp.block_type = false;
+			temp.parent = parent;
+			temp.pos = node_pos;
+			temp.size = 0;
+			write_block(&temp, &normal_data, node_pos);
+			return node_pos;
+		}
 
-        //创建新的索引结点
-        off_t create_normal_node(off_t parent) {
-            auto node_pos = memory_allocation();
-            BL_Head temp;
-            Normal_Dt normal_dt;
-            temp.BL_type = false;
-            temp.parent = parent;
-            temp.pos = node_pos;
-            temp.sz = 0;
-            wr_block(&temp, &normal_dt, node_pos);
-            return node_pos;
-        }
+		//创建新的叶子结点
+		off_t create_leaf_node(off_t parent, off_t last, off_t next) {
+			auto node_pos = memory_allocation();
+			Block_Head temp;
+			Leaf_Data leaf_data;
+			temp.block_type = true;
+			temp.parent = parent;
+			temp.pos = node_pos;
+			temp.last = last;
+			temp.next = next;
+			temp.size = 0;
+			write_block(&temp, &leaf_data, node_pos);
+			return node_pos;
+		}
+	
+		//索引节点插入新索引
+		void insert_new_index(Block_Head& parent_info, Normal_Data& parent_data, 
+			off_t origin, off_t new_pos, const Key& new_index) {
+			++parent_info.size;
+			auto p = parent_info.size - 2;
+			while (parent_data.val[p].child != origin) {
+				parent_data.val[p + 1] = parent_data.val[p];
+				--p;
+			}
+			parent_data.val[p + 1].key = parent_data.val[p].key;
+			parent_data.val[p].key = new_index;
+			parent_data.val[p + 1].child = new_pos;
+		}
 
-        //创建新的叶子结点
-        off_t create_lf_node(off_t parent, off_t last, off_t next) {
-            auto node_pos = memory_allocation();
-            BL_Head temp;
-            Lf_Dt lf_dt;
-            temp.BL_type = true;
-            temp.parent = parent;
-            temp.pos = node_pos;
-            temp.last = last;
-            temp.next = next;
-            temp.sz = 0;
-            wr_block(&temp, &lf_dt, node_pos);
-            return node_pos;
-        }
+		//读取结点信息
+		template <class DATA_TYPE>
+		static void read_block(Block_Head* info, DATA_TYPE* data, off_t pos)
+		{
+			char buff[BLOCK_SIZE] = { 0 };
+			mem_read(buff, BLOCK_SIZE, pos);
+			memcpy(info, buff, sizeof(Block_Head));
+			memcpy(data, buff + INIT_SIZE, sizeof(DATA_TYPE));
+		}
+		//写入节点信息
+		template <class DATA_TYPE>
+		static void write_block(Block_Head* info, DATA_TYPE* data, off_t pos) {
+			char buff[BLOCK_SIZE] = { 0 };
+			memcpy(buff, info, sizeof(Block_Head));
+			memcpy(buff + INIT_SIZE, data, sizeof(DATA_TYPE));
+			mem_write(buff, BLOCK_SIZE, pos);
+		}
 
-        //索引节点插入新索引
-        void insert_new_index(BL_Head& parent_info, Normal_Dt& parent_dt,
-                              off_t origin, off_t new_pos, const K& new_index) {
-            ++parent_info.sz;
-            auto p = parent_info.sz - 2;
-            while (parent_dt.val[p].son != origin) {
-                parent_dt.val[p + 1] = parent_dt.val[p];
-                --p;
-            }
-            parent_dt.val[p + 1].k = parent_dt.val[p].k;
-            parent_dt.val[p].k = new_index;
-            parent_dt.val[p + 1].son = new_pos;
-        }
+		//创建文件
+		void check_file() {
+			if (!fp) {
+				//创建新的树
+				fp = fopen(BPTREE_ADDRESS, "wb+");
+				write_tree_data();
 
-        //读取结点信息
-        template <class DT_TYPE>
-        static void read_block(BL_Head* info, DT_TYPE* dt, off_t pos)
-        {
-            char bf[BL_SZ] = { 0 };
-            m_rd(bf, BL_SZ, pos);
-            memcpy(info, bf, sizeof(BL_Head));
-            memcpy(dt, bf + IN_SZ, sizeof(DT_TYPE));
-        }
-        //写入节点信息
-        template <class DT_TYPE>
-        static void wr_block(BL_Head* info, DT_TYPE* dt, off_t pos) {
-            char bf[BL_SZ] = { 0 };
-            memcpy(bf, info, sizeof(BL_Head));
-            memcpy(bf + IN_SZ, dt, sizeof(DT_TYPE));
-            m_wr(bf, BL_SZ, pos);
-        }
+				auto node_head = tree_data.block_cnt,
+					node_rear = tree_data.block_cnt + 1;
 
-        //创建文件
-        void check_file() {
-            if (!fp) {
-                //创建新的树
-                fp = fopen(b+t_ad, "wb+");
-                wr_tr_dt();
+				tree_data.data_block_head = node_head;
+				tree_data.data_block_rear = node_rear;
 
-                auto node_head = tr_dt.bl_cnt,
-                        node_rear = tr_dt.bl_cnt + 1;
+				create_leaf_node(0, 0, node_rear);
+				create_leaf_node(0, node_head, 0);
 
-                tr_dt.dt_bl_hd = node_head;
-                tr_dt.dt_bl_rr = node_rear;
+				return;
+			}
+			char buff[BLOCK_SIZE] = { 0 };
+			mem_read(buff, BLOCK_SIZE, 0);
+			memcpy(&tree_data, buff, sizeof(tree_data));
+		}
+		
+		
+		//分裂叶子结点
+		Key split_leaf_node(off_t pos, Block_Head& origin_info, Leaf_Data& origin_data) {
+			//读入数据
+			off_t parent_pos;
+			Block_Head parent_info;
+			Normal_Data parent_data;
 
-                create_lf_node(0, 0, node_rear);
-                create_lf_node(0, node_head, 0);
+			//判断是否为根结点
+			if (pos == tree_data.root_pos) {
+				//创建根节点
+				auto root_pos = create_normal_node(0);
+				tree_data.root_pos = root_pos;
+				write_tree_data();
+				read_block(&parent_info, &parent_data, root_pos);
+				origin_info.parent = root_pos;
+				++parent_info.size;
+				parent_data.val[0].child = pos;
+				parent_pos = root_pos;
+			}
+			else {
+				read_block(&parent_info, &parent_data, origin_info.parent);
+				parent_pos = parent_info.pos;
+			}
+			if (split_parent(origin_info)) {
+				parent_pos = origin_info.parent;
+				read_block(&parent_info, &parent_data, parent_pos);
+			}
+			//创建一个新的子结点
+			auto new_pos = create_leaf_node(parent_pos,pos,origin_info.next);
+			
+			//修改后继结点的前驱
+			auto tmp_pos = origin_info.next;
+			Block_Head tmp_info;
+			Leaf_Data tmp_data;
+			read_block(&tmp_info, &tmp_data, tmp_pos);
+			tmp_info.last = new_pos;
+			write_block(&tmp_info, &tmp_data, tmp_pos);
+			origin_info.next = new_pos;
 
-                return;
-            }
-            char bf[BL_SZ] = { 0 };
-            m_rd(bf, BL_SZ, 0);
-            memcpy(&tr_dt, bf, sizeof(tr_dt));
-        }
+			Block_Head new_info;
+			Leaf_Data new_data;
+			read_block(&new_info, &new_data, new_pos);
 
+			//移动数据的位置
+			off_t mid_pos = origin_info.size >> 1;
+			for (off_t p = mid_pos, i = 0; p < origin_info.size; ++p, ++i) {
+				new_data.val[i].first = origin_data.val[p].first;
+				new_data.val[i].second = origin_data.val[p].second;
+				++new_info.size;
+			}
+			origin_info.size = mid_pos;
+			insert_new_index(parent_info, parent_data, pos, new_pos, origin_data.val[mid_pos].first);
 
-        //分裂叶子结点
-        K split_lf_node(off_t pos, BL_Head& origin_info, Lf_Dt& origin_dt) {
-            //读入数据
-            off_t parent_pos;
-            BL_Head parent_info;
-            Normal_Dt parent_dt;
+			//写入
+			write_block(&origin_info, &origin_data, pos);
+			write_block(&new_info, &new_data, new_pos);
+			write_block(&parent_info, &parent_data, parent_pos);
 
-            //判断是否为根结点
-            if (pos == tr_dt.rt_p) {
-                //创建根节点
-                auto rt_p = create_normal_node(0);
-                tr_dt.rt_p = rt_p;
-                wr_tr_dt();
-                read_block(&parent_info, &parent_dt, rt_p);
-                origin_info.parent = rt_p;
-                ++parent_info.sz;
-                parent_dt.val[0].son = pos;
-                parent_pos = rt_p;
-            }
-            else {
-                read_block(&parent_info, &parent_dt, origin_info.parent);
-                parent_pos = parent_info.pos;
-            }
-            if (split_parent(origin_info)) {
-                parent_pos = origin_info.parent;
-                read_block(&parent_info, &parent_dt, parent_pos);
-            }
-            //创建一个新的子结点
-            auto new_pos = create_lf_node(parent_pos,pos,origin_info.next);
+			return new_data.val[0].first;
+		}
 
-            //修改后继结点的前驱
-            auto tmp_pos = origin_info.next;
-            BL_Head tmp_info;
-            Lf_Dt tmp_dt;
-            read_block(&tmp_info, &tmp_dt, tmp_pos);
-            tmp_info.last = new_pos;
-            wr_block(&tmp_info, &tmp_dt, tmp_pos);
-            origin_info.next = new_pos;
+		//分裂父亲（返回新的父亲）
+		bool split_parent(Block_Head& child_info) {
+			//读入数据
+			off_t parent_pos, origin_pos = child_info.parent;
+			Block_Head parent_info, origin_info;
+			Normal_Data parent_data, origin_data;
+			read_block(&origin_info, &origin_data, origin_pos);
+			if (origin_info.size < BLOCK_KEY_NUM)
+				return false;
 
-            BL_Head new_info;
-            Lf_Dt new_dt;
-            read_block(&new_info, &new_dt, new_pos);
+			//判断是否为根结点
+			if (origin_pos == tree_data.root_pos) {
+				//创建根节点
+				auto root_pos = create_normal_node(0);
+				tree_data.root_pos = root_pos;
+				write_tree_data();
+				read_block(&parent_info, &parent_data, root_pos);
+				origin_info.parent = root_pos;
+				++parent_info.size;
+				parent_data.val[0].child = origin_pos;
+				parent_pos = root_pos;
+			}
+			else {
+				read_block(&parent_info, &parent_data, origin_info.parent);
+				parent_pos = parent_info.pos;
+			}
+			if (split_parent(origin_info)) {
+				parent_pos = origin_info.parent;
+				read_block(&parent_info, &parent_data, parent_pos);
+			}
+			//创建一个新的子结点
+			auto new_pos = create_normal_node(parent_pos);
+			Block_Head new_info;
+			Normal_Data new_data;
+			read_block(&new_info, &new_data, new_pos);
 
-            //移动数据的位置
-            off_t mid_pos = origin_info.sz >> 1;
-            for (off_t p = mid_pos, i = 0; p < origin_info.sz; ++p, ++i) {
-                new_dt.val[i].first = origin_dt.val[p].first;
-                new_dt.val[i].second = origin_dt.val[p].second;
-                ++new_info.sz;
-            }
-            origin_info.sz = mid_pos;
-            insert_new_index(parent_info, parent_dt, pos, new_pos, origin_dt.val[mid_pos].first);
+			//移动数据的位置
+			off_t mid_pos = origin_info.size >> 1;
+			for (off_t p = mid_pos + 1, i = 0; p < origin_info.size; ++p,++i) {
+				if (origin_data.val[p].child == child_info.pos) {
+					child_info.parent = new_pos;
+				}
+				std::swap(new_data.val[i], origin_data.val[p]);
+				++new_info.size;
+			}
+			origin_info.size = mid_pos + 1;
+			insert_new_index(parent_info, parent_data, origin_pos, new_pos, origin_data.val[mid_pos].key);
+			
+			//写入
+			write_block(&origin_info, &origin_data, origin_pos);
+			write_block(&new_info, &new_data, new_pos);
+			write_block(&parent_info, &parent_data, parent_pos);
+			return true;
+		}
 
-            //写入
-            wr_block(&origin_info, &origin_dt, pos);
-            wr_block(&new_info, &new_dt, new_pos);
-            wr_block(&parent_info, &parent_dt, parent_pos);
+		//合并索引
+		void merge_normal(Block_Head& l_info, Normal_Data& l_data, Block_Head& r_info, Normal_Data& r_data) {
+			for (off_t p = l_info.size, i = 0; i < r_info.size; ++p, ++i) {
+				l_data.val[p] = r_data.val[i];
+			}
+			l_data.val[l_info.size - 1].key = adjust_normal(r_info.parent, r_info.pos);
+			l_info.size += r_info.size;
+			write_block(&l_info, &l_data, l_info.pos);
+		}
+		//修改LCA的索引(平衡叶子时)
+		void change_index(off_t parent, off_t child, const Key& new_key) {
+			//读取数据
+			Block_Head parent_info;
+			Normal_Data parent_data;
+			read_block(&parent_info, &parent_data, parent);
+			if (parent_data.val[parent_info.size - 1].child == child) {
+				change_index(parent_info.parent, parent, new_key);
+				return;
+			}
+			off_t cur_pos = parent_info.size - 2;
+			while (true) {
+				if (parent_data.val[cur_pos].child == child) {
+					parent_data.val[cur_pos].key = new_key;
+					break;
+				}
+				--cur_pos;
+			}
+			write_block(&parent_info, &parent_data, parent);
+		}
 
-            return new_dt.val[0].first;
-        }
+		//平衡索引
+		void balance_normal(Block_Head& info, Normal_Data& normal_data) {
+			if (info.size >= BLOCK_KEY_NUM / 2) {
+				write_block(&info, &normal_data, info.pos);
+				return;
+			}
+			//判断是否是根
+			if (info.pos == tree_data.root_pos && info.size <= 1) {
+				tree_data.root_pos = normal_data.val[0].child;
+				write_tree_data();
+				return;
+			}
+			else if (info.pos == tree_data.root_pos) {
+				write_block(&info, &normal_data, info.pos);
+				return;
+			}
+			//获取兄弟
+			Block_Head parent_info, brother_info;
+			Normal_Data parent_data, brother_data;
+			read_block(&parent_info, &parent_data, info.parent);
+			off_t value_pos;
+			for (value_pos = 0; parent_data.val[value_pos].child != info.pos; ++value_pos);
+			if (value_pos > 0) {
+				read_block(&brother_info, &brother_data, parent_data.val[value_pos - 1].child);
+				brother_info.parent = info.parent;
+				if (brother_info.size > BLOCK_KEY_NUM / 2) {
+					off_t p = info.size;
+					while (p > 0) {
+						normal_data.val[p] = normal_data.val[p - 1];
+						--p;
+					}
+					normal_data.val[0].child = brother_data.val[brother_info.size - 1].child;
+					normal_data.val[0].key = parent_data.val[value_pos - 1].key;
+					parent_data.val[value_pos - 1].key = brother_data.val[brother_info.size - 2].key;
+					--brother_info.size;
+					++info.size;
+					write_block(&brother_info, &brother_data, brother_info.pos);
+					write_block(&info, &normal_data, info.pos);
+					write_block(&parent_info, &parent_data, parent_info.pos);
+					return;
+				}
+				else {
+					merge_normal(brother_info, brother_data, info, normal_data);
+					return;
+				}
+			}
+			if (value_pos < parent_info.size - 1) {
+				read_block(&brother_info, &brother_data, parent_data.val[value_pos + 1].child);
+				brother_info.parent = info.parent;
+				if (brother_info.size > BLOCK_KEY_NUM / 2) {
+					normal_data.val[info.size].child = brother_data.val[0].child;
+					normal_data.val[info.size - 1].key = parent_data.val[value_pos].key;
+					parent_data.val[value_pos].key = brother_data.val[0].key;
+					for (off_t p = 1; p < brother_info.size; ++p) 
+					{
+						brother_data.val[p - 1] = brother_data.val[p];
+					}
+					--brother_info.size;
+					++info.size;
+					write_block(&brother_info, &brother_data, brother_info.pos);
+					write_block(&info, &normal_data, info.pos);
+					write_block(&parent_info, &parent_data, parent_info.pos);
+					return;
+				}
+				else {
+					merge_normal(info, normal_data, brother_info, brother_data);
+					return;
+				}
+			}
+		}
 
-        //分裂父亲（返回新的父亲）
-        bool split_parent(BL_Head& son_info) {
-            //读入数据
-            off_t parent_pos, origin_pos = son_info.parent;
-            BL_Head parent_info, origin_info;
-            Normal_Dt parent_dt, origin_dt;
-            read_block(&origin_info, &origin_dt, origin_pos);
-            if (origin_info.sz < BL_K_N)
-                return false;
+		//调整索引(返回关键字)
+		Key adjust_normal(off_t pos, off_t removed_child) {
+			Block_Head info;
+			Normal_Data normal_data;
+			read_block(&info, &normal_data, pos);
+			off_t cur_pos;
+			for (cur_pos = 0; normal_data.val[cur_pos].child != removed_child; ++cur_pos);
+			Key ans = normal_data.val[cur_pos - 1].key;
+			normal_data.val[cur_pos - 1].key = normal_data.val[cur_pos].key;
+			while(cur_pos < info.size - 1)
+			{
+				normal_data.val[cur_pos] = normal_data.val[cur_pos + 1];
+				++cur_pos;
+			}
+			--info.size;
+			balance_normal(info, normal_data);
+			return ans;
+		}
 
-            //判断是否为根结点
-            if (origin_pos == tr_dt.rt_p) {
-                //创建根节点
-                auto rt_p = create_normal_node(0);
-                tr_dt.rt_p = rt_p;
-                wr_tr_dt();
-                read_block(&parent_info, &parent_dt, rt_p);
-                origin_info.parent = rt_p;
-                ++parent_info.sz;
-                parent_dt.val[0].son = origin_pos;
-                parent_pos = rt_p;
-            }
-            else {
-                read_block(&parent_info, &parent_dt, origin_info.parent);
-                parent_pos = parent_info.pos;
-            }
-            if (split_parent(origin_info)) {
-                parent_pos = origin_info.parent;
-                read_block(&parent_info, &parent_dt, parent_pos);
-            }
-            //创建一个新的子结点
-            auto new_pos = create_normal_node(parent_pos);
-            BL_Head new_info;
-            Normal_Dt new_dt;
-            read_block(&new_info, &new_dt, new_pos);
+		//合并叶子
+		void merge_leaf(Block_Head& l_info, Leaf_Data& l_data, Block_Head& r_info, Leaf_Data& r_data) {
+			for (off_t p = l_info.size, i = 0; i < r_info.size; ++p, ++i) {
+				l_data.val[p].first = r_data.val[i].first;
+				l_data.val[p].second = r_data.val[i].second;
+			}
+			l_info.size += r_info.size;
+			adjust_normal(r_info.parent, r_info.pos);
+			//修改链表
+			l_info.next = r_info.next;
+			Block_Head temp_info;
+			Leaf_Data temp_data;
+			read_block(&temp_info, &temp_data, r_info.next);
+			temp_info.last = l_info.pos;
+			write_block(&temp_info, &temp_data, temp_info.pos);
+			write_block(&l_info, &l_data, l_info.pos);
+		}
 
-            //移动数据的位置
-            off_t mid_pos = origin_info.sz >> 1;
-            for (off_t p = mid_pos + 1, i = 0; p < origin_info.sz; ++p,++i) {
-                if (origin_dt.val[p].son == son_info.pos) {
-                    son_info.parent = new_pos;
-                }
-                std::swap(new_dt.val[i], origin_dt.val[p]);
-                ++new_info.sz;
-            }
-            origin_info.sz = mid_pos + 1;
-            insert_new_index(parent_info, parent_dt, origin_pos, new_pos, origin_dt.val[mid_pos].k);
+		//平衡叶子
+		void balance_leaf(Block_Head& leaf_info, Leaf_Data& leaf_data) {
+			if (leaf_info.size >= BLOCK_PAIR_NUM / 2) {
+				write_block(&leaf_info, &leaf_data, leaf_info.pos);
+				return;
+			}
+			else if (leaf_info.pos == tree_data.root_pos) {
+				if (leaf_info.size == 0) {
+					Block_Head temp_info;
+					Leaf_Data temp_data;
+					read_block(&temp_info, &temp_data, tree_data.data_block_head);
+					temp_info.next = tree_data.data_block_rear;
+					write_block(&temp_info, &temp_data, tree_data.data_block_head);
+					read_block(&temp_info, &temp_data, tree_data.data_block_rear);
+					temp_info.last = tree_data.data_block_head;
+					write_block(&temp_info, &temp_data, tree_data.data_block_rear);
+					return;
+				}
+				write_block(&leaf_info, &leaf_data, leaf_info.pos);
+				return;
+			}
+			//查找兄弟结点
+			Block_Head brother_info, parent_info;
+			Leaf_Data brother_data;
+			Normal_Data parent_data;
 
-            //写入
-            wr_block(&origin_info, &origin_dt, origin_pos);
-            wr_block(&new_info, &new_dt, new_pos);
-            wr_block(&parent_info, &parent_dt, parent_pos);
-            return true;
-        }
+			read_block(&parent_info, &parent_data, leaf_info.parent);
+			off_t node_pos = 0;
+			while (node_pos < parent_info.size)
+			{
+				if (parent_data.val[node_pos].child == leaf_info.pos)
+					break;
+				++node_pos;
+			}
+		
+			//左兄弟
+			if (node_pos > 0) {
+				read_block(&brother_info, &brother_data, leaf_info.last);
+					brother_info.parent = leaf_info.parent;
+					if (brother_info.size > BLOCK_PAIR_NUM / 2) {
+						for (off_t p = leaf_info.size; p > 0; --p) {
+							leaf_data.val[p].first = leaf_data.val[p - 1].first;
+							leaf_data.val[p].second = leaf_data.val[p - 1].second;
+						}
+						leaf_data.val[0].first = brother_data.val[brother_info.size - 1].first;
+						leaf_data.val[0].second = brother_data.val[brother_info.size - 1].second;
+						--brother_info.size;
+						++leaf_info.size;
+						change_index(brother_info.parent, brother_info.pos, leaf_data.val[0].first);
+						write_block(&brother_info, &brother_data, brother_info.pos);
+						write_block(&leaf_info, &leaf_data, leaf_info.pos);
+						return;
+					}
+					else {
+						merge_leaf(brother_info, brother_data, leaf_info, leaf_data);
+						//write_block(&brother_info, &brother_data, brother_info._pos);
+						return;
+					}
+			}
+			//右兄弟
+			if (node_pos < parent_info.size - 1) {
+				read_block(&brother_info, &brother_data, leaf_info.next);
+				brother_info.parent = leaf_info.parent;
+				if (brother_info.size > BLOCK_PAIR_NUM / 2) {
+					leaf_data.val[leaf_info.size].first = brother_data.val[0].first;
+					leaf_data.val[leaf_info.size].second = brother_data.val[0].second;
+					for (off_t p = 1; p < brother_info.size; ++p) {
+						brother_data.val[p - 1].first = brother_data.val[p].first;
+						brother_data.val[p - 1].second = brother_data.val[p].second;
+					}
+					++leaf_info.size;
+					--brother_info.size;
+					change_index(leaf_info.parent, leaf_info.pos, brother_data.val[0].first);
+					write_block(&leaf_info, &leaf_data, leaf_info.pos);
+					write_block(&brother_info, &brother_data, brother_info.pos);
+					return;
+				}
+				else {
+					merge_leaf(leaf_info, leaf_data, brother_info, brother_data);
+					return;
+				}
+			}
+		}
 
-        //合并索引
-        void merge_normal(BL_Head& l_info, Normal_Dt& l_dt, BL_Head& r_info, Normal_Dt& r_dt) {
-            for (off_t p = l_info.sz, i = 0; i < r_info.sz; ++p, ++i) {
-                l_dt.val[p] = r_dt.val[i];
-            }
-            l_dt.val[l_info.sz - 1].k = adjust_normal(r_info.parent, r_info.pos);
-            l_info.sz += r_info.sz;
-            wr_block(&l_info, &l_dt, l_info.pos);
-        }
-        //修改LCA的索引(平衡叶子时)
-        void change_index(off_t parent, off_t son, const K& new_k) {
-            //读取数据
-            BL_Head parent_info;
-            Normal_Dt parent_dt;
-            read_block(&parent_info, &parent_dt, parent);
-            if (parent_dt.val[parent_info.sz - 1].son == son) {
-                change_index(parent_info.parent, parent, new_k);
-                return;
-            }
-            off_t cur_pos = parent_info.sz - 2;
-            while (true) {
-                if (parent_dt.val[cur_pos].son == son) {
-                    parent_dt.val[cur_pos].k = new_k;
-                    break;
-                }
-                --cur_pos;
-            }
-            wr_block(&parent_info, &parent_dt, parent);
-        }
+	public:
+		typedef pair<const Key, Value> value_type;
 
-        //平衡索引
-        void balance_normal(BL_Head& info, Normal_Dt& normal_dt) {
-            if (info.sz >= BL_K_N / 2) {
-                wr_block(&info, &normal_dt, info.pos);
-                return;
-            }
-            //判断是否是根
-            if (info.pos == tr_dt.rt_p && info.sz <= 1) {
-                tr_dt.rt_p = normal_dt.val[0].son;
-                wr_tr_dt();
-                return;
-            }
-            else if (info.pos == tr_dt.rt_p) {
-                wr_block(&info, &normal_dt, info.pos);
-                return;
-            }
-            //获取兄弟
-            BL_Head parent_info, brother_info;
-            Normal_Dt parent_dt, brother_dt;
-            read_block(&parent_info, &parent_dt, info.parent);
-            off_t value_pos;
-            for (value_pos = 0; parent_dt.val[value_pos].son != info.pos; ++value_pos);
-            if (value_pos > 0) {
-                read_block(&brother_info, &brother_dt, parent_dt.val[value_pos - 1].son);
-                brother_info.parent = info.parent;
-                if (brother_info.sz > BL_K_N / 2) {
-                    off_t p = info.sz;
-                    while (p > 0) {
-                        normal_dt.val[p] = normal_dt.val[p - 1];
-                        --p;
-                    }
-                    normal_dt.val[0].son = brother_dt.val[brother_info.sz - 1].son;
-                    normal_dt.val[0].k = parent_dt.val[value_pos - 1].k;
-                    parent_dt.val[value_pos - 1].k = brother_dt.val[brother_info.sz - 2].k;
-                    --brother_info.sz;
-                    ++info.sz;
-                    wr_block(&brother_info, &brother_dt, brother_info.pos);
-                    wr_block(&info, &normal_dt, info.pos);
-                    wr_block(&parent_info, &parent_dt, parent_info.pos);
-                    return;
-                }
-                else {
-                    merge_normal(brother_info, brother_dt, info, normal_dt);
-                    return;
-                }
-            }
-            if (value_pos < parent_info.sz - 1) {
-                read_block(&brother_info, &brother_dt, parent_dt.val[value_pos + 1].son);
-                brother_info.parent = info.parent;
-                if (brother_info.sz > BL_K_N / 2) {
-                    normal_dt.val[info.sz].son = brother_dt.val[0].son;
-                    normal_dt.val[info.sz - 1].k = parent_dt.val[value_pos].k;
-                    parent_dt.val[value_pos].k = brother_dt.val[0].k;
-                    for (off_t p = 1; p < brother_info.sz; ++p)
-                    {
-                        brother_dt.val[p - 1] = brother_dt.val[p];
-                    }
-                    --brother_info.sz;
-                    ++info.sz;
-                    wr_block(&brother_info, &brother_dt, brother_info.pos);
-                    wr_block(&info, &normal_dt, info.pos);
-                    wr_block(&parent_info, &parent_dt, parent_info.pos);
-                    return;
-                }
-                else {
-                    merge_normal(info, normal_dt, brother_info, brother_dt);
-                    return;
-                }
-            }
-        }
+		class const_iterator;
+		class iterator {
+			friend class sjtu::BTree<Key, Value, Compare>::const_iterator;
+			friend iterator sjtu::BTree<Key, Value, Compare>::begin();
+			friend iterator sjtu::BTree<Key, Value, Compare>::end();
+			friend iterator sjtu::BTree<Key, Value, Compare>::find(const Key&);
+			friend pair<iterator, OperationResult> sjtu::BTree<Key, Value, Compare>::insert(const Key&, const Value&);
+		private:
+			// Your private members go here
+			//指向当前bpt
+			BTree* cur_bptree = nullptr;
+			//存储当前块的基本信息
+			Block_Head block_info;
+			//存储当前指向的元素位置
+			off_t cur_pos = 0;
 
-        //调整索引(返回关键字)
-        K adjust_normal(off_t pos, off_t removed_son) {
-            BL_Head info;
-            Normal_Dt normal_dt;
-            read_block(&info, &normal_dt, pos);
-            off_t cur_pos;
-            for (cur_pos = 0; normal_dt.val[cur_pos].son != removed_son; ++cur_pos);
-            K ans = normal_dt.val[cur_pos - 1].k;
-            normal_dt.val[cur_pos - 1].k = normal_dt.val[cur_pos].k;
-            while(cur_pos < info.sz - 1)
-            {
-                normal_dt.val[cur_pos] = normal_dt.val[cur_pos + 1];
-                ++cur_pos;
-            }
-            --info.sz;
-            balance_normal(info, normal_dt);
-            return ans;
-        }
+		public:
+			bool modify(const Value& value) {
+				Block_Head info;
+				Leaf_Data leaf_data;
+				read_block(&info, &leaf_data, block_info.pos);
+				leaf_data.val[cur_pos].second = value;
+				write_block(&info, &leaf_data, block_info.pos);
+				return true;
+			}
+			iterator() {
+				// TODO Default Constructor
+			}
+			iterator(const iterator& other) {
+				// TODO Copy Constructor
+				cur_bptree = other.cur_bptree;
+				block_info = other.block_info;
+				cur_pos = other.cur_pos;
+			}
+			// Return a new iterator which points to the n-next elements
+			iterator operator++(int) {
+				// Todo iterator++
+				auto tmp = *this;
+				++cur_pos;
+				if (cur_pos >= block_info.size) {
+					char buff[BLOCK_SIZE] = { 0 };
+					mem_read(buff, BLOCK_SIZE, block_info.next);
+					memcpy(&block_info, buff, sizeof(block_info));
+					cur_pos = 0;
+				}
+				return tmp;
+			}
+			iterator& operator++() {
+				// Todo ++iterator
+				++cur_pos;
+				if (cur_pos >= block_info.size) {
+					char buff[BLOCK_SIZE] = { 0 };
+					mem_read(buff, BLOCK_SIZE, block_info.next);
+					memcpy(&block_info, buff, sizeof(block_info));
+					cur_pos = 0;
+				}
+				return *this;
+			}
+			iterator operator--(int) {
+				// Todo iterator--
+				auto temp = *this;
+				if (cur_pos == 0) {
+					char buff[BLOCK_SIZE] = { 0 };
+					mem_read(buff, BLOCK_SIZE, block_info.last);
+					memcpy(&block_info, buff, sizeof(block_info));
+					cur_pos = block_info.size - 1;
+				}
+				else
+					--cur_pos;
+				return temp;
+			}
+			iterator& operator--() {
+				// Todo --iterator
+				if (cur_pos == 0) {
+					char buff[BLOCK_SIZE] = { 0 };
+					mem_read(buff, BLOCK_SIZE, block_info.last);
+					memcpy(&block_info, buff, sizeof(block_info));
+					cur_pos = block_info.size - 1;
+				}
+				else
+					--cur_pos;
+				
+				return *this;
+			}
+			// Overloaded of operator '==' and '!='
+			// Check whether the iterators are same
+			value_type operator*() const {
+				// Todo operator*, return the <K,V> of iterator
+				if (cur_pos >= block_info.size)
+					throw invalid_iterator();
+				char buff[BLOCK_SIZE] = { 0 };
+				mem_read(buff, BLOCK_SIZE, block_info.pos);
+				Leaf_Data leaf_data;
+				memcpy(&leaf_data, buff + INIT_SIZE, sizeof(leaf_data));
+				value_type result(leaf_data.val[cur_pos].first,leaf_data.val[cur_pos].second);
+				return result;
+			}
+			bool operator==(const iterator& rhs) const {
+				// Todo operator ==
+				return cur_bptree == rhs.cur_bptree
+					&& block_info.pos == rhs.block_info.pos
+					&& cur_pos == rhs.cur_pos;
+			}
+			bool operator==(const const_iterator& rhs) const {
+				// Todo operator ==
+				return block_info.pos == rhs.block_info.pos
+					&& cur_pos == rhs.cur_pos;
+			}
+			bool operator!=(const iterator& rhs) const {
+				// Todo operator !=
+				return cur_bptree != rhs.cur_bptree
+					|| block_info.pos != rhs.block_info.pos
+					|| cur_pos != rhs.cur_pos;
+			}
+			bool operator!=(const const_iterator& rhs) const {
+				// Todo operator !=
+				return block_info.pos != rhs.block_info.pos
+					|| cur_pos != rhs.cur_pos;
+			}
+		};
+		class const_iterator {
+			// it should has similar member method as iterator.
+			//  and it should be able to construct from an iterator.
+			friend class sjtu::BTree<Key, Value, Compare>::iterator;
+			friend const_iterator sjtu::BTree<Key, Value, Compare>::cbegin() const;
+			friend const_iterator sjtu::BTree<Key, Value, Compare>::cend() const;
+			friend const_iterator sjtu::BTree<Key, Value, Compare>::find(const Key&) const;
+		private:
+			// Your private members go here
+			//存储当前块的基本信息
+			Block_Head block_info;
+			//存储当前指向的元素位置
+			off_t cur_pos = 0;
+		public:
+			const_iterator() {
+				// TODO
+			}
+			const_iterator(const const_iterator& other) {
+				// TODO
+				block_info = other.block_info;
+				cur_pos = other.cur_pos;
+			}
+			const_iterator(const iterator& other) {
+				// TODO
+				block_info = other.block_info;
+				cur_pos = other.cur_pos;
+			}
+			// And other methods in iterator, please fill by yourself.
+			// Return a new iterator which points to the n-next elements
+			const_iterator operator++(int) {
+				// Todo iterator++
+				auto tmp = *this;
+				++cur_pos;
+				if (cur_pos >= block_info.size) {
+					char buff[BLOCK_SIZE] = { 0 };
+					mem_read(buff, BLOCK_SIZE, block_info.next);
+					memcpy(&block_info, buff, sizeof(block_info));
+					cur_pos = 0;
+				}
+				return tmp;
+			}
+			const_iterator& operator++() {
+				// Todo ++iterator
+				++cur_pos;
+				if (cur_pos >= block_info.size) {
+					char buff[BLOCK_SIZE] = { 0 };
+					mem_read(buff, BLOCK_SIZE, block_info.next);
+					memcpy(&block_info, buff, sizeof(block_info));
+					cur_pos = 0;
+				}
+				return *this;
+			}
+			const_iterator operator--(int) {
+				// Todo iterator--
+				auto tmp = *this;
+				if (cur_pos == 0) {
+					char buff[BLOCK_SIZE] = { 0 };
+					mem_read(buff, BLOCK_SIZE, block_info.last);
+					memcpy(&block_info, buff, sizeof(block_info));
+					cur_pos = block_info.size - 1;
+				}
+				else
+					--cur_pos;
+				return tmp;
+			}
+			const_iterator& operator--() {
+				// Todo --iterator
+				if (cur_pos == 0) {
+					char buff[BLOCK_SIZE] = { 0 };
+					mem_read(buff, BLOCK_SIZE, block_info.last);
+					memcpy(&block_info, buff, sizeof(block_info));
+					cur_pos = block_info.size - 1;
+				}
+				else
+					--cur_pos;
 
-        //合并叶子
-        void merge_lf(BL_Head& l_info, Lf_Dt& l_dt, BL_Head& r_info, Lf_Dt& r_dt) {
-            for (off_t p = l_info.sz, i = 0; i < r_info.sz; ++p, ++i) {
-                l_dt.val[p].first = r_dt.val[i].first;
-                l_dt.val[p].second = r_dt.val[i].second;
-            }
-            l_info.sz += r_info.sz;
-            adjust_normal(r_info.parent, r_info.pos);
-            //修改链表
-            l_info.next = r_info.next;
-            BL_Head temp_info;
-            Lf_Dt temp_dt;
-            read_block(&temp_info, &temp_dt, r_info.next);
-            temp_info.last = l_info.pos;
-            wr_block(&temp_info, &temp_dt, temp_info.pos);
-            wr_block(&l_info, &l_dt, l_info.pos);
-        }
+				return *this;
+			}
+			// Overloaded of operator '==' and '!='
+			// Check whether the iterators are same
+			value_type operator*() const {
+				// Todo operator*, return the <K,V> of iterator
+				if (cur_pos >= block_info.size)
+					throw invalid_iterator();
+				char buff[BLOCK_SIZE] = { 0 };
+				mem_read(buff, BLOCK_SIZE, block_info.pos);
+				Leaf_Data leaf_data;
+				memcpy(&leaf_data, buff + INIT_SIZE, sizeof(leaf_data));
+				value_type result(leaf_data.val[cur_pos].first, leaf_data.val[cur_pos].second);
+				return result;
+			}
+			bool operator==(const iterator& rhs) const {
+				// Todo operator ==
+				return block_info.pos == rhs.block_info.pos
+					&& cur_pos == rhs.cur_pos;
+			}
+			bool operator==(const const_iterator& rhs) const {
+				// Todo operator ==
+				return block_info.pos == rhs.block_info.pos
+					&& cur_pos == rhs.cur_pos;
+			}
+			bool operator!=(const iterator& rhs) const {
+				// Todo operator !=
+				return block_info.pos != rhs.block_info.pos
+					|| cur_pos != rhs.cur_pos;
+			}
+			bool operator!=(const const_iterator& rhs) const {
+				// Todo operator !=
+				return block_info.pos != rhs.block_info.pos
+					|| cur_pos != rhs.cur_pos;
+			}
+		};
+		// Default Constructor and Copy Constructor
+		BTree() {
+			// Todo Default
+			fp = fopen(BPTREE_ADDRESS, "rb+");
+			if (!fp) {
+				//创建新的树
+				fp = fopen(BPTREE_ADDRESS, "wb+");
+				write_tree_data();
+				
+				auto node_head = tree_data.block_cnt,
+					node_rear = tree_data.block_cnt + 1;
 
-        //平衡叶子
-        void balance_lf(BL_Head& lf_info, Lf_Dt& lf_dt) {
-            if (lf_info.sz >= BL_PAIR_N / 2) {
-                wr_block(&lf_info, &lf_dt, lf_info.pos);
-                return;
-            }
-            else if (lf_info.pos == tr_dt.rt_p) {
-                if (lf_info.sz == 0) {
-                    BL_Head temp_info;
-                    Lf_Dt temp_dt;
-                    read_block(&temp_info, &temp_dt, tr_dt.dt_bl_hd);
-                    temp_info.next = tr_dt.dt_bl_rr;
-                    wr_block(&temp_info, &temp_dt, tr_dt.dt_bl_hd);
-                    read_block(&temp_info, &temp_dt, tr_dt.dt_bl_rr);
-                    temp_info.last = tr_dt.dt_bl_hd;
-                    wr_block(&temp_info, &temp_dt, tr_dt.dt_bl_rr);
-                    return;
-                }
-                wr_block(&lf_info, &lf_dt, lf_info.pos);
-                return;
-            }
-            //查找兄弟结点
-            BL_Head brother_info, parent_info;
-            Lf_Dt brother_dt;
-            Normal_Dt parent_dt;
+				tree_data.data_block_head = node_head;
+				tree_data.data_block_rear = node_rear;
 
-            read_block(&parent_info, &parent_dt, lf_info.parent);
-            off_t node_pos = 0;
-            while (node_pos < parent_info.sz)
-            {
-                if (parent_dt.val[node_pos].son == lf_info.pos)
-                    break;
-                ++node_pos;
-            }
+				create_leaf_node(0, 0, node_rear);
+				create_leaf_node(0, node_head, 0);
 
-            //左兄弟
-            if (node_pos > 0) {
-                read_block(&brother_info, &brother_dt, lf_info.last);
-                brother_info.parent = lf_info.parent;
-                if (brother_info.sz > BL_PAIR_N / 2) {
-                    for (off_t p = lf_info.sz; p > 0; --p) {
-                        lf_dt.val[p].first = lf_dt.val[p - 1].first;
-                        lf_dt.val[p].second = lf_dt.val[p - 1].second;
-                    }
-                    lf_dt.val[0].first = brother_dt.val[brother_info.sz - 1].first;
-                    lf_dt.val[0].second = brother_dt.val[brother_info.sz - 1].second;
-                    --brother_info.sz;
-                    ++lf_info.sz;
-                    change_index(brother_info.parent, brother_info.pos, lf_dt.val[0].first);
-                    wr_block(&brother_info, &brother_dt, brother_info.pos);
-                    wr_block(&lf_info, &lf_dt, lf_info.pos);
-                    return;
-                }
-                else {
-                    merge_lf(brother_info, brother_dt, lf_info, lf_dt);
-                    //wr_block(&brother_info, &brother_dt, brother_info._pos);
-                    return;
-                }
-            }
-            //右兄弟
-            if (node_pos < parent_info.sz - 1) {
-                read_block(&brother_info, &brother_dt, lf_info.next);
-                brother_info.parent = lf_info.parent;
-                if (brother_info.sz > BL_PAIR_N / 2) {
-                    lf_dt.val[lf_info.sz].first = brother_dt.val[0].first;
-                    lf_dt.val[lf_info.sz].second = brother_dt.val[0].second;
-                    for (off_t p = 1; p < brother_info.sz; ++p) {
-                        brother_dt.val[p - 1].first = brother_dt.val[p].first;
-                        brother_dt.val[p - 1].second = brother_dt.val[p].second;
-                    }
-                    ++lf_info.sz;
-                    --brother_info.sz;
-                    change_index(lf_info.parent, lf_info.pos, brother_dt.val[0].first);
-                    wr_block(&lf_info, &lf_dt, lf_info.pos);
-                    wr_block(&brother_info, &brother_dt, brother_info.pos);
-                    return;
-                }
-                else {
-                    merge_lf(lf_info, lf_dt, brother_info, brother_dt);
-                    return;
-                }
-            }
-        }
+				return;
+			}
+			char buff[BLOCK_SIZE] = { 0 };
+			mem_read(buff, BLOCK_SIZE, 0);
+			memcpy(&tree_data, buff, sizeof(tree_data));
+		}
+		BTree(const BTree& other) {
+			// Todo Copy
+			fp = fopen(BPTREE_ADDRESS, "rb+");
+			tree_data.block_cnt = other.tree_data.block_cnt;
+			tree_data.data_block_head = other.tree_data.data_block_head;
+			tree_data.data_block_rear = other.tree_data.data_block_rear;
+			tree_data.root_pos = other.tree_data.root_pos;
+			tree_data.size = other.tree_data.size;
+		}
+		BTree& operator=(const BTree& other) {
+			// Todo Assignment
+			fp = fopen(BPTREE_ADDRESS, "rb+");
+			tree_data.block_cnt = other.tree_data.block_cnt;
+			tree_data.data_block_head = other.tree_data.data_block_head;
+			tree_data.data_block_rear = other.tree_data.data_block_rear;
+			tree_data.root_pos = other.tree_data.root_pos;
+			tree_data.size = other.tree_data.size;
+			return *this;
+		}
+		~BTree() {
+			// Todo Destructor
+			fclose(fp);
+		}
+		// Insert: Insert certain Key-Value into the database
+		// Return a pair, the first of the pair is the iterator point to the new
+		// element, the second of the pair is Success if it is successfully inserted
+		pair<iterator, OperationResult> insert(const Key& key, const Value& value) {
+			// TODO insert function
+			check_file();
+			if (empty()) {
+				auto root_pos = create_leaf_node(0, tree_data.data_block_head, tree_data.data_block_rear);
+				
+				Block_Head temp_info;
+				Leaf_Data temp_data;
+				read_block(&temp_info, &temp_data, tree_data.data_block_head);
+				temp_info.next = root_pos;
+				write_block(&temp_info, &temp_data, tree_data.data_block_head);
 
-    public:
-        typedef pair<const K, Val> value_type;
+				read_block(&temp_info, &temp_data, tree_data.data_block_rear);
+				temp_info.last = root_pos;
+				write_block(&temp_info, &temp_data, tree_data.data_block_rear);
 
-        class const_iterator;
-        class iterator {
-            friend class sjtu::BTree<K, Val, Cmp>::const_iterator;
-            friend iterator sjtu::BTree<K, Val, Cmp>::begin();
-            friend iterator sjtu::BTree<K, Val, Cmp>::end();
-            friend iterator sjtu::BTree<K, Val, Cmp>::find(const K&);
-            friend pair<iterator, OperationResult> sjtu::BTree<K, Val, Cmp>::insert(const K&, const Value&);
-        private:
-            // Your private members go here
-            //指向当前bpt
-            BTree* cur_bptree = nullptr;
-            //存储当前块的基本信息
-            BL_Head block_info;
-            //存储当前指向的元素位置
-            off_t cur_pos = 0;
+				read_block(&temp_info, &temp_data, root_pos);
+				++temp_info.size;
+				temp_data.val[0].first = key;
+				temp_data.val[0].second = value;
+				write_block(&temp_info, &temp_data, root_pos);
 
-        public:
-            bool modify(const Val& value) {
-                BL_Head info;
-                Lf_Dt lf_dt;
-                read_block(&info, &lf_dt, block_info.pos);
-                lf_dt.val[cur_pos].second = value;
-                wr_block(&info, &lf_dt, block_info.pos);
-                return true;
-            }
-            iterator() {
-                // TODO Default Constructor
-            }
-            iterator(const iterator& other) {
-                // TODO Copy Constructor
-                cur_bptree = other.cur_bptree;
-                block_info = other.block_info;
-                cur_pos = other.cur_pos;
-            }
-            // Return a new iterator which points to the n-next elements
-            iterator operator++(int) {
-                // Todo iterator++
-                auto tmp = *this;
-                ++cur_pos;
-                if (cur_pos >= block_info.sz) {
-                    char bf[BL_SZ] = { 0 };
-                    m_rd(bf, BL_SZ, block_info.next);
-                    memcpy(&block_info, bf, sizeof(block_info));
-                    cur_pos = 0;
-                }
-                return tmp;
-            }
-            iterator& operator++() {
-                // Todo ++iterator
-                ++cur_pos;
-                if (cur_pos >= block_info.sz) {
-                    char bf[BL_SZ] = { 0 };
-                    m_rd(bf, BL_SZ, block_info.next);
-                    memcpy(&block_info, bf, sizeof(block_info));
-                    cur_pos = 0;
-                }
-                return *this;
-            }
-            iterator operator--(int) {
-                // Todo iterator--
-                auto temp = *this;
-                if (cur_pos == 0) {
-                    char bf[BL_SZ] = { 0 };
-                    m_rd(bf, BL_SZ, block_info.last);
-                    memcpy(&block_info, bf, sizeof(block_info));
-                    cur_pos = block_info.sz - 1;
-                }
-                else
-                    --cur_pos;
-                return temp;
-            }
-            iterator& operator--() {
-                // Todo --iterator
-                if (cur_pos == 0) {
-                    char bf[BL_SZ] = { 0 };
-                    m_rd(bf, BL_SZ, block_info.last);
-                    memcpy(&block_info, bf, sizeof(block_info));
-                    cur_pos = block_info.sz - 1;
-                }
-                else
-                    --cur_pos;
+				++tree_data.size;
+				tree_data.root_pos = root_pos;
+				write_tree_data();
 
-                return *this;
-            }
-            // Overloaded of operator '==' and '!='
-            // Check whether the iterators are same
-            value_type operator*() const {
-                // Todo operator*, return the <K,V> of iterator
-                if (cur_pos >= block_info.sz)
-                    throw invalid_iterator();
-                char bf[BL_SZ] = { 0 };
-                m_rd(bf, BL_SZ, block_info.pos);
-                Lf_Dt lf_dt;
-                memcpy(&lf_dt, bf + IN_SZ, sizeof(lf_dt));
-                value_type result(lf_dt.val[cur_pos].first,lf_dt.val[cur_pos].second);
-                return result;
-            }
-            bool operator==(const iterator& rhs) const {
-                // Todo operator ==
-                return cur_bptree == rhs.cur_bptree
-                       && block_info.pos == rhs.block_info.pos
-                       && cur_pos == rhs.cur_pos;
-            }
-            bool operator==(const const_iterator& rhs) const {
-                // Todo operator ==
-                return block_info.pos == rhs.block_info.pos
-                       && cur_pos == rhs.cur_pos;
-            }
-            bool operator!=(const iterator& rhs) const {
-                // Todo operator !=
-                return cur_bptree != rhs.cur_bptree
-                       || block_info.pos != rhs.block_info.pos
-                       || cur_pos != rhs.cur_pos;
-            }
-            bool operator!=(const const_iterator& rhs) const {
-                // Todo operator !=
-                return block_info.pos != rhs.block_info.pos
-                       || cur_pos != rhs.cur_pos;
-            }
-        };
-        class const_iterator {
-            // it should has similar member method as iterator.
-            //  and it should be able to construct from an iterator.
-            friend class sjtu::BTree<K, Val, Cmp>::iterator;
-            friend const_iterator sjtu::BTree<K, Val, Cmp>::cbegin() const;
-            friend const_iterator sjtu::BTree<K, Val, Cmp>::cend() const;
-            friend const_iterator sjtu::BTree<K, Val, Cmp>::find(const K&) const;
-        private:
-            // Your private members go here
-            //存储当前块的基本信息
-            BL_Head block_info;
-            //存储当前指向的元素位置
-            off_t cur_pos = 0;
-        public:
-            const_iterator() {
-                // TODO
-            }
-            const_iterator(const const_iterator& other) {
-                // TODO
-                block_info = other.block_info;
-                cur_pos = other.cur_pos;
-            }
-            const_iterator(const iterator& other) {
-                // TODO
-                block_info = other.block_info;
-                cur_pos = other.cur_pos;
-            }
-            // And other methods in iterator, please fill by yourself.
-            // Return a new iterator which points to the n-next elements
-            const_iterator operator++(int) {
-                // Todo iterator++
-                auto tmp = *this;
-                ++cur_pos;
-                if (cur_pos >= block_info.sz) {
-                    char bf[BL_SZ] = { 0 };
-                    m_rd(bf, BL_SZ, block_info.next);
-                    memcpy(&block_info, bf, sizeof(block_info));
-                    cur_pos = 0;
-                }
-                return tmp;
-            }
-            const_iterator& operator++() {
-                // Todo ++iterator
-                ++cur_pos;
-                if (cur_pos >= block_info.sz) {
-                    char bf[BL_SZ] = { 0 };
-                    m_rd(bf, BL_SZ, block_info.next);
-                    memcpy(&block_info, bf, sizeof(block_info));
-                    cur_pos = 0;
-                }
-                return *this;
-            }
-            const_iterator operator--(int) {
-                // Todo iterator--
-                auto tmp = *this;
-                if (cur_pos == 0) {
-                    char bf[BL_SZ] = { 0 };
-                    m_rd(bf, BL_SZ, block_info.last);
-                    memcpy(&block_info, bf, sizeof(block_info));
-                    cur_pos = block_info.sz - 1;
-                }
-                else
-                    --cur_pos;
-                return tmp;
-            }
-            const_iterator& operator--() {
-                // Todo --iterator
-                if (cur_pos == 0) {
-                    char bf[BL_SZ] = { 0 };
-                    m_rd(bf, BL_SZ, block_info.last);
-                    memcpy(&block_info, bf, sizeof(block_info));
-                    cur_pos = block_info.sz - 1;
-                }
-                else
-                    --cur_pos;
+				pair<iterator, OperationResult> result(begin(), Success);
+				return result;
+			}
 
-                return *this;
-            }
-            // Overloaded of operator '==' and '!='
-            // Check whether the iterators are same
-            value_type operator*() const {
-                // Todo operator*, return the <K,V> of iterator
-                if (cur_pos >= block_info.sz)
-                    throw invalid_iterator();
-                char bf[BL_SZ] = { 0 };
-                m_rd(bf, BL_SZ, block_info.pos);
-                Lf_Dt lf_dt;
-                memcpy(&lf_dt, bf + IN_SZ, sizeof(lf_dt));
-                value_type result(lf_dt.val[cur_pos].first, lf_dt.val[cur_pos].second);
-                return result;
-            }
-            bool operator==(const iterator& rhs) const {
-                // Todo operator ==
-                return block_info.pos == rhs.block_info.pos
-                       && cur_pos == rhs.cur_pos;
-            }
-            bool operator==(const const_iterator& rhs) const {
-                // Todo operator ==
-                return block_info.pos == rhs.block_info.pos
-                       && cur_pos == rhs.cur_pos;
-            }
-            bool operator!=(const iterator& rhs) const {
-                // Todo operator !=
-                return block_info.pos != rhs.block_info.pos
-                       || cur_pos != rhs.cur_pos;
-            }
-            bool operator!=(const const_iterator& rhs) const {
-                // Todo operator !=
-                return block_info.pos != rhs.block_info.pos
-                       || cur_pos != rhs.cur_pos;
-            }
-        };
-        // Default Constructor and Copy Constructor
-        BTree() {
-            // Todo Default
-            fp = fopen(b+t_ad, "rb+");
-            if (!fp) {
-                //创建新的树
-                fp = fopen(b+t_ad, "wb+");
-                wr_tr_dt();
+			//查找正确的节点位置
+			char buff[BLOCK_SIZE] = { 0 };
+			off_t cur_pos = tree_data.root_pos, cur_parent = 0;
+			while (true) {
+				mem_read(buff, BLOCK_SIZE, cur_pos);
+				Block_Head temp;
+				memcpy(&temp, buff, sizeof(temp));
+				//判断父亲是否更新
+				if (cur_parent != temp.parent) {
+					temp.parent = cur_parent;
+					memcpy(buff, &temp, sizeof(temp));
+					mem_write(buff, BLOCK_SIZE, cur_pos);
+				}
+				if (temp.block_type) {
+					break;
+				}
+				Normal_Data normal_data;
+				memcpy(&normal_data, buff + INIT_SIZE, sizeof(normal_data));
+				off_t child_pos = temp.size - 1;
+				while (child_pos > 0) {
+					if (normal_data.val[child_pos - 1].key <= key) break;
+					--child_pos;
+				}
+				cur_parent = cur_pos;
+				cur_pos = normal_data.val[child_pos].child;
+				cur_pos = cur_pos;
+			}
 
-                auto node_head = tr_dt.bl_cnt,
-                        node_rear = tr_dt.bl_cnt + 1;
-
-                tr_dt.dt_bl_hd = node_head;
-                tr_dt.dt_bl_rr = node_rear;
-
-                create_lf_node(0, 0, node_rear);
-                create_lf_node(0, node_head, 0);
-
-                return;
-            }
-            char bf[BL_SZ] = { 0 };
-            m_rd(bf, BL_SZ, 0);
-            memcpy(&tr_dt, bf, sizeof(tr_dt));
-        }
-        BTree(const BTree& other) {
-            // Todo Copy
-            fp = fopen(b+t_ad, "rb+");
-            tr_dt.bl_cnt = other.tr_dt.bl_cnt;
-            tr_dt.dt_bl_hd = other.tr_dt.dt_bl_hd;
-            tr_dt.dt_bl_rr = other.tr_dt.dt_bl_rr;
-            tr_dt.rt_p = other.tr_dt.rt_p;
-            tr_dt.sz = other.tr_dt.sz;
-        }
-        BTree& operator=(const BTree& other) {
-            // Todo Assignment
-            fp = fopen(b+t_ad, "rb+");
-            tr_dt.bl_cnt = other.tr_dt.bl_cnt;
-            tr_dt.dt_bl_hd = other.tr_dt.dt_bl_hd;
-            tr_dt.dt_bl_rr = other.tr_dt.dt_bl_rr;
-            tr_dt.rt_p = other.tr_dt.rt_p;
-            tr_dt.sz = other.tr_dt.sz;
-            return *this;
-        }
-        ~BTree() {
-            // Todo Destructor
-            fclose(fp);
-        }
-        // Insert: Insert certain K-Val into the database
-        // Return a pair, the first of the pair is the iterator point to the new
-        // element, the second of the pair is Success if it is successfully inserted
-        pair<iterator, OperationResult> insert(const K& k, const Val& value) {
-            // TODO insert function
-            check_file();
-            if (empty()) {
-                auto rt_p = create_lf_node(0, tr_dt.dt_bl_hd, tr_dt.dt_bl_rr);
-
-                BL_Head temp_info;
-                Lf_Dt temp_dt;
-                read_block(&temp_info, &temp_dt, tr_dt.dt_bl_hd);
-                temp_info.next = rt_p;
-                wr_block(&temp_info, &temp_dt, tr_dt.dt_bl_hd);
-
-                read_block(&temp_info, &temp_dt, tr_dt.dt_bl_rr);
-                temp_info.last = rt_p;
-                wr_block(&temp_info, &temp_dt, tr_dt.dt_bl_rr);
-
-                read_block(&temp_info, &temp_dt, rt_p);
-                ++temp_info.sz;
-                temp_dt.val[0].first = k;
-                temp_dt.val[0].second = value;
-                wr_block(&temp_info, &temp_dt, rt_p);
-
-                ++tr_dt.sz;
-                tr_dt.rt_p = rt_p;
-                wr_tr_dt();
-
-                pair<iterator, OperationResult> result(begin(), Success);
-                return result;
-            }
-
-            //查找正确的节点位置
-            char bf[BL_SZ] = { 0 };
-            off_t cur_pos = tr_dt.rt_p, cur_parent = 0;
-            while (true) {
-                m_rd(bf, BL_SZ, cur_pos);
-                BL_Head temp;
-                memcpy(&temp, bf, sizeof(temp));
-                //判断父亲是否更新
-                if (cur_parent != temp.parent) {
-                    temp.parent = cur_parent;
-                    memcpy(bf, &temp, sizeof(temp));
-                    m_wr(bf, BL_SZ, cur_pos);
-                }
-                if (temp.BL_type) {
-                    break;
-                }
-                Normal_Dt normal_dt;
-                memcpy(&normal_dt, bf + IN_SZ, sizeof(normal_dt));
-                off_t son_pos = temp.sz - 1;
-                while (son_pos > 0) {
-                    if (normal_dt.val[son_pos - 1].k <= k) break;
-                    --son_pos;
-                }
-                cur_parent = cur_pos;
-                cur_pos = normal_dt.val[son_pos].son;
-                cur_pos = cur_pos;
-            }
-
-            BL_Head info;
-            memcpy(&info, bf, sizeof(info));
-            Lf_Dt lf_dt;
-            memcpy(&lf_dt, bf + IN_SZ, sizeof(lf_dt));
-            for (off_t value_pos = 0;; ++value_pos) {
-                if (value_pos < info.sz && (!(lf_dt.val[value_pos].first < k || lf_dt.val[value_pos].first > k))) {
+			Block_Head info;
+			memcpy(&info, buff, sizeof(info));
+			Leaf_Data leaf_data;
+			memcpy(&leaf_data, buff + INIT_SIZE, sizeof(leaf_data));
+			for (off_t value_pos = 0;; ++value_pos) {
+				if (value_pos < info.size && (!(leaf_data.val[value_pos].first < key || leaf_data.val[value_pos].first > key))) {
                     return pair<iterator, OperationResult>(end(), Fail);
-                }
-                if (value_pos >= info.sz || lf_dt.val[value_pos].first > k) {
-                    //在此结点之前插入
-                    if (info.sz >= BL_PAIR_N) {
-                        auto cur_k = split_lf_node(cur_pos, info, lf_dt);
-                        if (k > cur_k) {
-                            cur_pos = info.next;
-                            value_pos -= info.sz;
-                            read_block(&info, &lf_dt, cur_pos);
-                        }
-                    }
-
-                    for (off_t p = info.sz - 1; p >= value_pos; --p)
-                    {
-                        lf_dt.val[p + 1].first = lf_dt.val[p].first;
-                        lf_dt.val[p + 1].second = lf_dt.val[p].second;
-                        if (p == value_pos)
-                            break;
-                    }
-                    lf_dt.val[value_pos].first = k;
-                    lf_dt.val[value_pos].second = value;
-                    ++info.sz;
-                    wr_block(&info, &lf_dt, cur_pos);
-                    iterator ans;
-                    ans.block_info = info;
-                    ans.cur_bptree = this;
-                    ans.cur_pos = value_pos;
-                    //修改树的基本参数
-                    ++tr_dt.sz;
-                    wr_tr_dt();
-                    pair<iterator, OperationResult> re(ans, Success);
-                    return re;
-                }
-            }
-            return pair<iterator, OperationResult>(end(), Fail);
-        }
-        // Erase: Erase the K-Val
-        // Return Success if it is successfully erased
-        // Return Fail if the k doesn't exist in the database
-        OperationResult erase(const K& k) {
-            return Fail;
-        }
-        iterator begin() {
-            check_file();
-            iterator result;
-            char bf[BL_SZ] = { 0 };
-            m_rd(bf, BL_SZ, tr_dt.dt_bl_hd);
-            BL_Head block_head;
-            memcpy(&block_head, bf, sizeof(block_head));
-            result.block_info = block_head;
-            result.cur_bptree = this;
-            result.cur_pos = 0;
-            ++result;
-            return result;
-        }
-        const_iterator cbegin() const {
-            const_iterator result;
-            char bf[BL_SZ] = { 0 };
-            m_rd(bf, BL_SZ, tr_dt.dt_bl_hd);
-            BL_Head block_head;
-            memcpy(&block_head, bf, sizeof(block_head));
-            result.block_info = block_head;
-            result.cur_pos = 0;
-            ++result;
-            return result;
-        }
-        // Return a iterator to the end(the next element after the last)
-        iterator end() {
-            check_file();
-            iterator result;
-            char bf[BL_SZ] = { 0 };
-            m_rd(bf, BL_SZ, tr_dt.dt_bl_rr);
-            BL_Head block_head;
-            memcpy(&block_head, bf, sizeof(block_head));
-            result.block_info = block_head;
-            result.cur_bptree = this;
-            result.cur_pos = 0;
-            return result;
-        }
-        const_iterator cend() const {
-            const_iterator result;
-            char bf[BL_SZ] = { 0 };
-            m_rd(bf, BL_SZ, tr_dt.dt_bl_rr);
-            BL_Head block_head;
-            memcpy(&block_head, bf, sizeof(block_head));
-            result.block_info = block_head;
-            result.cur_pos = 0;
-            return result;
-        }
-        // Check whether this BTree is empty
-        bool empty() const {
-            if (!fp)
-                return true;
-            return tr_dt.sz == 0;
-        }
-        // Return the number of <K,V> pairs
-        off_t sz() const {
-            if (!fp)
-                return 0;
-            return tr_dt.sz;
-        }
-        // Clear the BTree
-        void clear() {
-            if (!fp)
-                return;
-            remove(b+t_ad);
-            FL_Head new_fl_hd;
-            tr_dt = new_fl_hd;
-            fp = nullptr;
-        }
-        // Return the value refer to the K(k)
-        Val at(const K& k) {
-            if (empty()) {
-                throw container_is_empty();
-            }
-            //查找正确的节点位置
-            char bf[BL_SZ] = { 0 };
-            off_t cur_pos = tr_dt.rt_p, cur_parent = 0;
-            while (true) {
-                m_rd(bf, BL_SZ, cur_pos);
-                BL_Head temp;
-                memcpy(&temp, bf, sizeof(temp));
-                //判断父亲是否更新
-                if (cur_parent != temp.parent) {
-                    temp.parent = cur_parent;
-                    memcpy(bf, &temp, sizeof(temp));
-                    m_wr(bf, BL_SZ, cur_pos);
-                }
-                if (temp.BL_type) break;
-
-                Normal_Dt normal_dt;
-                memcpy(&normal_dt, bf + IN_SZ, sizeof(normal_dt));
-                off_t son_pos = temp.sz - 1;
-                for (; son_pos > 0; --son_pos) {
-                    if (normal_dt.val[son_pos - 1].k <= k) {
-                        break;
-                    }
-                }
-                cur_pos = normal_dt.val[son_pos].son;
-            }
-            BL_Head info;
-            memcpy(&info, bf, sizeof(info));
-            Lf_Dt lf_dt;
-            memcpy(&lf_dt, bf + IN_SZ, sizeof(lf_dt));
-            for (off_t value_pos = 0;; ++value_pos) {
-                if (value_pos < info.sz && (!(lf_dt.val[value_pos].first<k || lf_dt.val[value_pos].first>k))) {
-                    return lf_dt.val[value_pos].second;
-                }
-                if (value_pos >= info.sz || lf_dt.val[value_pos].first > k) {
-                    throw index_out_of_bound();
-                }
-            }
-        }
-
-        /**
-         * Returns the number of elements with k
-         *   that compares equivalent to the specified argument,
-         * The default method of check the equivalence is !(a < b || b > a)
-         */
-        off_t count(const K& k) const {
-            return find(k) == cend() ? 0 : 1;
-        }
-
-        /**
-         * Finds an element with k equivalent to k.
-         * k value of the element to search for.
-         * Iterator to an element with k equivalent to k.
-         *   If no such element is found, past-the-end (see end()) iterator is
-         * returned.
-         */
-        iterator find(const K& k) {
-            if (empty()) {
-                return end();
-            }
-            //查找正确的节点位置
-            char bf[BL_SZ] = { 0 };
-            off_t cur_pos = tr_dt.rt_p, cur_parent = 0;
-            while (true) {
-                m_rd(bf, BL_SZ, cur_pos);
-                BL_Head temp;
-                memcpy(&temp, bf, sizeof(temp));
-                //判断父亲是否更新
-                if (cur_parent != temp.parent) {
-                    temp.parent = cur_parent;
-                    memcpy(bf, &temp, sizeof(temp));
-                    mem_wr(bf, BL_SZ, cur_pos);
-                }
-                if (temp.BL_type) {
-                    break;
-                }
-                Normal_Dt normal_dt;
-                memcpy(&normal_dt, bf + IN_SZ, sizeof(normal_dt));
-                off_t son_pos = temp.sz - 1;
-                for (; son_pos > 0; --son_pos) {
-                    if (!(normal_dt.val[son_pos - 1].k > k)) {
-                        break;
-                    }
-                }
-                cur_pos = normal_dt.val[son_pos].son;
-            }
-            BL_Head info;
-            memcpy(&info, bf, sizeof(info));
-            sizeof(Normal_Dt);
-            Lf_Dt lf_dt;
-            memcpy(&lf_dt, bf + IN_SZ, sizeof(lf_dt));
-            for (off_t value_pos = 0;; ++value_pos) {
-                if (value_pos < info.sz && (!(lf_dt.val[value_pos].first<k || lf_dt.val[value_pos].first>k))) {
-                    iterator result;
-                    result.cur_bptree = this;
-                    result.block_info = info;
-                    result.cur_pos = value_pos;
-                    return result;
-                }
-                if (value_pos >= info.sz || lf_dt.val[value_pos].first > k) {
-                    return end();
-                }
-            }
-            return end();
-        }
-        const_iterator find(const K& k) const {
-            if (empty()) {
-                return cend();
-            }
-            //查找正确的节点位置
-            char bf[BL_SZ] = { 0 };
-            off_t cur_pos = tr_dt.rt_p, cur_parent = 0;
-            while (true) {
-                m_rd(bf, BL_SZ, cur_pos);
-                BL_Head temp;
-                memcpy(&temp, bf, sizeof(temp));
-                //判断父亲是否更新
-                if (cur_parent != temp.parent) {
-                    temp.parent = cur_parent;
-                    memcpy(bf, &temp, sizeof(temp));
-                    mem_wr(bf, BL_SZ, cur_pos);
-                }
-                if (temp.BL_type) {
-                    break;
-                }
-                Normal_Dt normal_dt;
-                memcpy(&normal_dt, bf + IN_SZ, sizeof(normal_dt));
-                off_t son_pos = temp.sz - 1;
-                for (; son_pos > 0; --son_pos) {
-                    if (!(normal_dt.val[son_pos - 1].k > k)) {
-                        break;
-                    }
-                }
-                cur_pos = normal_dt.val[son_pos].son;
-            }
-            BL_Head info;
-            memcpy(&info, bf, sizeof(info));
-            Lf_Dt lf_dt;
-            memcpy(&lf_dt, bf + IN_SZ, sizeof(lf_dt));
-            for (off_t value_pos = 0;; ++value_pos) {
-                if (value_pos < info.sz && (!(lf_dt.val[value_pos].first<k || lf_dt.val[value_pos].first>k))) {
-                    const_iterator result;
-                    result.block_info = info;
-                    result.cur_pos = value_pos;
-                    return result;
-                }
-                if (value_pos >= info.sz || lf_dt.val[value_pos].first > k) {
-                    return cend();
-                }
-            }
-            return cend();
-        }
-    };
-    template <typename K, typename Val, typename Cmp> FILE* BTree<K, Val, Cmp>::fp = nullptr;
+				}
+				if (value_pos >= info.size || leaf_data.val[value_pos].first > key) {
+					//在此结点之前插入
+					if (info.size >= BLOCK_PAIR_NUM) {
+						auto cur_key = split_leaf_node(cur_pos, info, leaf_data);
+						if (key > cur_key) {
+							cur_pos = info.next;
+							value_pos -= info.size;
+							read_block(&info, &leaf_data, cur_pos);
+						}
+					}
+					
+					for (off_t p = info.size - 1; p >= value_pos; --p)
+					{
+						leaf_data.val[p + 1].first = leaf_data.val[p].first;
+						leaf_data.val[p + 1].second = leaf_data.val[p].second;
+						if (p == value_pos)
+							break;
+					}
+					leaf_data.val[value_pos].first = key;
+					leaf_data.val[value_pos].second = value;
+					++info.size;
+					write_block(&info, &leaf_data, cur_pos);
+					iterator ans;
+					ans.block_info = info;
+					ans.cur_bptree = this;
+					ans.cur_pos = value_pos;
+					//修改树的基本参数
+					++tree_data.size;
+					write_tree_data();
+					pair<iterator, OperationResult> re(ans, Success);
+					return re;
+				}
+			}
+			return pair<iterator, OperationResult>(end(), Fail);
+		}
+		// Erase: Erase the Key-Value
+		// Return Success if it is successfully erased
+		// Return Fail if the key doesn't exist in the database
+		OperationResult erase(const Key& key) {
+			return Fail; 
+		}
+		iterator begin() {
+			check_file();
+			iterator result;
+			char buff[BLOCK_SIZE] = { 0 };
+			mem_read(buff, BLOCK_SIZE, tree_data.data_block_head);
+			Block_Head block_head;
+			memcpy(&block_head, buff, sizeof(block_head));
+			result.block_info = block_head;
+			result.cur_bptree = this;
+			result.cur_pos = 0;
+			++result;
+			return result;
+		}
+		const_iterator cbegin() const {
+			const_iterator result;
+			char buff[BLOCK_SIZE] = { 0 };
+			mem_read(buff, BLOCK_SIZE, tree_data.data_block_head);
+			Block_Head block_head;
+			memcpy(&block_head, buff, sizeof(block_head));
+			result.block_info = block_head;
+			result.cur_pos = 0;
+			++result;
+			return result;
+		}
+		// Return a iterator to the end(the next element after the last)
+		iterator end() {
+			check_file();
+			iterator result;
+			char buff[BLOCK_SIZE] = { 0 };
+			mem_read(buff, BLOCK_SIZE, tree_data.data_block_rear);
+			Block_Head block_head;
+			memcpy(&block_head, buff, sizeof(block_head));
+			result.block_info = block_head;
+			result.cur_bptree = this;
+			result.cur_pos = 0;
+			return result;
+		}
+		const_iterator cend() const {
+			const_iterator result;
+			char buff[BLOCK_SIZE] = { 0 };
+			mem_read(buff, BLOCK_SIZE, tree_data.data_block_rear);
+			Block_Head block_head;
+			memcpy(&block_head, buff, sizeof(block_head));
+			result.block_info = block_head;
+			result.cur_pos = 0;
+			return result;
+		}
+		// Check whether this BTree is empty
+		bool empty() const {
+			if (!fp)
+				return true;
+			return tree_data.size == 0;
+		}
+		// Return the number of <K,V> pairs
+		off_t size() const {
+			if (!fp)
+				return 0;
+			return tree_data.size;
+		}
+		// Clear the BTree
+		void clear() {
+			if (!fp)
+				return;
+			remove(BPTREE_ADDRESS);
+			File_Head new_file_head;
+			tree_data = new_file_head;
+			fp = nullptr;
+		}
+		// Return the value refer to the Key(key)
+		Value at(const Key& key) {
+			if (empty()) {
+				throw container_is_empty();
+			}
+			//查找正确的节点位置
+			char buff[BLOCK_SIZE] = { 0 };
+			off_t cur_pos = tree_data.root_pos, cur_parent = 0;
+			while (true) {
+				mem_read(buff, BLOCK_SIZE, cur_pos);
+				Block_Head temp;
+				memcpy(&temp, buff, sizeof(temp));
+				//判断父亲是否更新
+				if (cur_parent != temp.parent) {
+					temp.parent = cur_parent;
+					memcpy(buff, &temp, sizeof(temp));
+					mem_write(buff, BLOCK_SIZE, cur_pos);
+				}
+				if (temp.block_type) break;
+				
+				Normal_Data normal_data;
+				memcpy(&normal_data, buff + INIT_SIZE, sizeof(normal_data));
+				off_t child_pos = temp.size - 1;
+				for (; child_pos > 0; --child_pos) {
+					if (normal_data.val[child_pos - 1].key <= key) {
+						break;
+					}
+				}
+				cur_pos = normal_data.val[child_pos].child;
+			}
+			Block_Head info;
+			memcpy(&info, buff, sizeof(info));
+			Leaf_Data leaf_data;
+			memcpy(&leaf_data, buff + INIT_SIZE, sizeof(leaf_data));
+			for (off_t value_pos = 0;; ++value_pos) {
+				if (value_pos < info.size && (!(leaf_data.val[value_pos].first<key || leaf_data.val[value_pos].first>key))) {
+					return leaf_data.val[value_pos].second;
+				}
+				if (value_pos >= info.size || leaf_data.val[value_pos].first > key) {
+					throw index_out_of_bound();
+				}
+			}
+		}
+		
+		/**
+		 * Returns the number of elements with key
+		 *   that compares equivalent to the specified argument,
+		 * The default method of check the equivalence is !(a < b || b > a)
+		 */
+		off_t count(const Key& key) const {
+			return find(key) == cend() ? 0 : 1;
+		}
+		
+		/**
+		 * Finds an element with key equivalent to key.
+		 * key value of the element to search for.
+		 * Iterator to an element with key equivalent to key.
+		 *   If no such element is found, past-the-end (see end()) iterator is
+		 * returned.
+		 */
+		iterator find(const Key& key) {
+			if (empty()) {
+				return end();
+			}
+			//查找正确的节点位置
+			char buff[BLOCK_SIZE] = { 0 };
+			off_t cur_pos = tree_data.root_pos, cur_parent = 0;
+			while (true) {
+				mem_read(buff, BLOCK_SIZE, cur_pos);
+				Block_Head temp;
+				memcpy(&temp, buff, sizeof(temp));
+				//判断父亲是否更新
+				if (cur_parent != temp.parent) {
+					temp.parent = cur_parent;
+					memcpy(buff, &temp, sizeof(temp));
+					mem_write(buff, BLOCK_SIZE, cur_pos);
+				}
+				if (temp.block_type) {
+					break;
+				}
+				Normal_Data normal_data;
+				memcpy(&normal_data, buff + INIT_SIZE, sizeof(normal_data));
+				off_t child_pos = temp.size - 1;
+				for (; child_pos > 0; --child_pos) {
+					if (!(normal_data.val[child_pos - 1].key > key)) {
+						break;
+					}
+				}
+				cur_pos = normal_data.val[child_pos].child;
+			}
+			Block_Head info;
+			memcpy(&info, buff, sizeof(info));
+			sizeof(Normal_Data);
+			Leaf_Data leaf_data;
+			memcpy(&leaf_data, buff + INIT_SIZE, sizeof(leaf_data));
+			for (off_t value_pos = 0;; ++value_pos) {
+				if (value_pos < info.size && (!(leaf_data.val[value_pos].first<key || leaf_data.val[value_pos].first>key))) {
+					iterator result;
+					result.cur_bptree = this;
+					result.block_info = info;
+					result.cur_pos = value_pos;
+					return result;
+				}
+				if (value_pos >= info.size || leaf_data.val[value_pos].first > key) {
+					return end();
+				}
+			}
+			return end();
+		}
+		const_iterator find(const Key& key) const {
+			if (empty()) {
+				return cend();
+			}
+			//查找正确的节点位置
+			char buff[BLOCK_SIZE] = { 0 };
+			off_t cur_pos = tree_data.root_pos, cur_parent = 0;
+			while (true) {
+				mem_read(buff, BLOCK_SIZE, cur_pos);
+				Block_Head temp;
+				memcpy(&temp, buff, sizeof(temp));
+				//判断父亲是否更新
+				if (cur_parent != temp.parent) {
+					temp.parent = cur_parent;
+					memcpy(buff, &temp, sizeof(temp));
+					mem_write(buff, BLOCK_SIZE, cur_pos);
+				}
+				if (temp.block_type) {
+					break;
+				}
+				Normal_Data normal_data;
+				memcpy(&normal_data, buff + INIT_SIZE, sizeof(normal_data));
+				off_t child_pos = temp.size - 1;
+				for (; child_pos > 0; --child_pos) {
+					if (!(normal_data.val[child_pos - 1].key > key)) {
+						break;
+					}
+				}
+				cur_pos = normal_data.val[child_pos].child;
+			}
+			Block_Head info;
+			memcpy(&info, buff, sizeof(info));
+			Leaf_Data leaf_data;
+			memcpy(&leaf_data, buff + INIT_SIZE, sizeof(leaf_data));
+			for (off_t value_pos = 0;; ++value_pos) {
+				if (value_pos < info.size && (!(leaf_data.val[value_pos].first<key || leaf_data.val[value_pos].first>key))) {
+					const_iterator result;
+					result.block_info = info;
+					result.cur_pos = value_pos;
+					return result;
+				}
+				if (value_pos >= info.size || leaf_data.val[value_pos].first > key) {
+					return cend();
+				}
+			}
+			return cend();
+		}
+	};
+	template <typename Key, typename Value, typename Compare> FILE* BTree<Key, Value, Compare>::fp = nullptr;
 }  // namespace sjtu
