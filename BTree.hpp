@@ -172,7 +172,7 @@ namespace sjtu {
         void check_file() {
             if (!fp) {
                 //创建新的树
-                fp = fopen(b+t ad, "wb+");
+                fp = fopen(b+t_ad, "wb+");
                 wr_tr_dt();
 
                 auto node_head = tr_dt.bl_cnt,
@@ -768,10 +768,10 @@ namespace sjtu {
         // Default Constructor and Copy Constructor
         BTree() {
             // Todo Default
-            fp = fopen(b+t ad, "rb+");
+            fp = fopen(b+t_ad, "rb+");
             if (!fp) {
                 //创建新的树
-                fp = fopen(b+t ad, "wb+");
+                fp = fopen(b+t_ad, "wb+");
                 wr_tr_dt();
 
                 auto node_head = tr_dt.bl_cnt,
@@ -791,7 +791,7 @@ namespace sjtu {
         }
         BTree(const BTree& other) {
             // Todo Copy
-            fp = fopen(b+t ad, "rb+");
+            fp = fopen(b+t_ad, "rb+");
             tr_dt.bl_cnt = other.tr_dt.bl_cnt;
             tr_dt.dt_bl_hd = other.tr_dt.dt_bl_hd;
             tr_dt.dt_bl_rr = other.tr_dt.dt_bl_rr;
@@ -800,7 +800,7 @@ namespace sjtu {
         }
         BTree& operator=(const BTree& other) {
             // Todo Assignment
-            fp = fopen(b+t ad, "rb+");
+            fp = fopen(b+t_ad, "rb+");
             tr_dt.bl_cnt = other.tr_dt.bl_cnt;
             tr_dt.dt_bl_hd = other.tr_dt.dt_bl_hd;
             tr_dt.dt_bl_rr = other.tr_dt.dt_bl_rr;
@@ -985,7 +985,7 @@ namespace sjtu {
         void clear() {
             if (!fp)
                 return;
-            remove(b+t ad);
+            remove(b+t_ad);
             FL_Head new_fl_hd;
             tr_dt = new_fl_hd;
             fp = nullptr;
